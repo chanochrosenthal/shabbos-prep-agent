@@ -1,0 +1,21 @@
+# Python
+__pycache__/
+*.py[cod]
+.pytest_cache/
+*.egg-info/
+build/
+dist/
+
+# Environments & secrets
+.venv/
+venv/
+.env
+.env.*
+*.key
+
+# Local test artifacts
+livetest/
+*.orig
+*.ics
+flagged/
+.gradio/
