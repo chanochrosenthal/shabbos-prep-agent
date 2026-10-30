@@ -112,3 +112,21 @@ def test_summary_falls_back_when_model_returns_nothing():
          "tasks": [{"start": "2026-10-30T13:00:00-04:00", "end": "2026-10-30T14:00:00-04:00", "title": "Soup"}]}
     out = agent.summarize(p, client=Empty())
     assert "1:00 PM - Soup" in out and "5:38 PM" in out
+
+
+def test_message_times_match_timeline_even_if_model_invents_times():
+    class Liar:
+        chat = NS(completions=NS(create=lambda **k: NS(choices=[NS(message=NS(
+            content="Kugel goes in at 2:15 PM and soup at 3:00 PM!"))])))
+    p = {"candle_lighting": "2026-10-30T17:38:00-04:00",
+         "tasks": [{"start": "2026-10-30T13:15:00-04:00", "end": "2026-10-30T14:15:00-04:00", "title": "Bake kugel"},
+                   {"start": "2026-10-30T13:00:00-04:00", "end": "2026-10-30T15:00:00-04:00", "title": "Cook chicken soup"},
+                   {"start": "2026-10-30T16:45:00-04:00", "end": "2026-10-30T17:23:00-04:00", "title": "Free time / buffer"}]}
+    out = agent.summarize(p, client=Liar())
+    assert "2:15" not in out and "3:00" not in out          # invented times rejected
+    lines = out.splitlines()
+    assert lines[1] == "1:00 PM - Cook chicken soup" and lines[2] == "1:15 PM - Bake kugel"
+    assert lines[-1].startswith("5:38 PM - Candle lighting") and "buffer" not in out
+    import re
+    table = {f"{agent.dt.datetime.fromisoformat(t['start']):%-I:%M %p}" for t in p["tasks"]} | {"5:38 PM"}
+    assert set(re.findall(r"\d{1,2}:\d{2} [AP]M", out)) <= table

@@ -8,6 +8,7 @@ Model routing (per the Nebius track guidance):
 from __future__ import annotations
 import datetime as dt
 import json
+import re
 import os
 from typing import Any, Callable
 
@@ -169,44 +170,57 @@ def plan(request: str, client=None, max_steps: int = 8, trace: list | None = Non
     raise RuntimeError("Agent did not finish within max_steps")
 
 
-def summarize(plan_obj: dict, client=None) -> str:
-    """Fast model: a short, friendly message the family can forward on WhatsApp."""
-    client = client or make_client()
-    facts = ""
-    try:
-        c = dt.datetime.fromisoformat(plan_obj["candle_lighting"])
-        facts = f" Candle lighting is exactly {c:%-I:%M %p} on {c:%A %b %-d}; state that time."
-    except Exception:
-        pass
-    slim = {k: plan_obj.get(k) for k in ("location", "candle_lighting", "tasks")}
-    for _ in range(2):  # the fast model occasionally returns empty content; retry once
-        try:
-            resp = client.chat.completions.create(
-                model=FAST_MODEL, temperature=0.3, max_tokens=2048,
-                messages=[{"role": "system", "content": "Write a warm 5-line Erev Shabbos game plan "
-                           "for a family group chat. Plain text, times in 12-hour format, no emojis "
-                           "overload. Use ONLY times that appear in the JSON; never invent a time."
-                           + facts},
-                          {"role": "user", "content": json.dumps(slim)}])
-            text = (resp.choices[0].message.content or "").strip()
-            if text:
-                return text
-        except Exception:
-            pass
-    return _fallback_summary(plan_obj)
+_TIME_RE = re.compile(r"\b\d{1,2}(:\d{2})?\s*([AaPp]\.?[Mm]\.?)|\b\d{1,2}:\d{2}\b")
+_SKIP = ("buffer", "free time", "candle")
 
 
-def _fallback_summary(plan_obj: dict) -> str:
-    """Deterministic message if the model is unavailable: first steps plus candle lighting."""
-    lines = []
-    for t in plan_obj.get("tasks", [])[:4]:
+def _message_lines(plan_obj: dict, limit: int = 6) -> list[str]:
+    """Time lines rendered in code straight from the timeline, so they always match the table."""
+    rows = []
+    for t in plan_obj.get("tasks", []):
         try:
-            lines.append(f"{dt.datetime.fromisoformat(t['start']):%-I:%M %p} - {t['title']}")
+            start = dt.datetime.fromisoformat(t["start"])
         except Exception:
             continue
+        if any(k in t.get("title", "").lower() for k in _SKIP):
+            continue
+        rows.append((start, t["title"]))
+    rows.sort(key=lambda r: r[0])
+    lines = [f"{s:%-I:%M %p} - {title}" for s, title in rows[:limit]]
     try:
         c = dt.datetime.fromisoformat(plan_obj["candle_lighting"])
         lines.append(f"{c:%-I:%M %p} - Candle lighting. Good Shabbos!")
     except Exception:
         pass
-    return "\n".join(lines)
+    return lines
+
+
+def _friendly_line(plan_obj: dict, client) -> str:
+    """Fast model writes ONE warm opening sentence with no times; rejected if it contains any time."""
+    slim = {"location": plan_obj.get("location"), "guests_and_tasks": [t.get("title") for t in plan_obj.get("tasks", [])]}
+    for _ in range(2):  # the fast model occasionally returns empty content; retry once
+        try:
+            resp = client.chat.completions.create(
+                model=FAST_MODEL, temperature=0.4, max_tokens=2048,
+                messages=[{"role": "system", "content": "Write ONE warm, upbeat sentence (max 25 words) "
+                           "opening an Erev Shabbos game plan for a family group chat. Do NOT mention any "
+                           "clock times or numbers of minutes/hours. Plain text, at most one emoji."},
+                          {"role": "user", "content": json.dumps(slim)}])
+            text = (resp.choices[0].message.content or "").strip().splitlines()
+            text = text[0].strip() if text else ""
+            if text and not _TIME_RE.search(text):
+                return text
+        except Exception:
+            pass
+    return "Here's our Erev Shabbos game plan:"
+
+
+def summarize(plan_obj: dict, client=None) -> str:
+    """Family message: friendly opener from Nemotron Nano + time lines rendered in code from the timeline."""
+    client = client or make_client()
+    return "\n".join([_friendly_line(plan_obj, client)] + _message_lines(plan_obj))
+
+
+def _fallback_summary(plan_obj: dict) -> str:
+    """Deterministic message without the model."""
+    return "\n".join(["Here's our Erev Shabbos game plan:"] + _message_lines(plan_obj))
