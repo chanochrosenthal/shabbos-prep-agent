@@ -78,4 +78,37 @@ def test_ground_overrides_model_times_and_warns():
     out = _ground(p, trace)
     assert out["candle_lighting"] == "2026-10-30T17:38:00-04:00"
     assert out["parsha"] == "Lech-Lecha"
-    assert any("Urn" in w for w in out["warnings"]) and any("Soup" in w for w in out["warnings"])
+    assert any("Urn" in w for w in out["_violations"]) and any("Soup" in w for w in out["_violations"])
+
+
+class LateThenFixedClient(FakeClient):
+    """First plan ends inside the 15-minute buffer; after the self-check it returns a fixed plan."""
+    def create(self, model, messages, **kw):
+        out = super().create(model, messages, **kw)
+        if self.calls == 1:
+            return out
+        end = "2026-10-30T17:35:00-04:00" if self.calls == 2 else "2026-10-30T17:00:00-04:00"
+        plan = {"location": "Lakewood", "candle_lighting": "2026-10-30T17:38:00-04:00", "warnings": [],
+                "tasks": [{"start": "2026-10-30T16:30:00-04:00", "end": end, "title": "Urn", "who": "", "note": ""}]}
+        return NS(choices=[NS(message=NS(content=json.dumps(plan), tool_calls=None))])
+
+
+def test_self_check_repairs_buffer_violation(monkeypatch):
+    monkeypatch.setattr(agent.hebcal, "shabbos_times", lambda **k: {
+        "location": "Lakewood, New Jersey, USA",
+        "items": [{"category": "candles", "title": "Candle lighting: 5:38pm",
+                   "date": "2026-10-30T17:38:00-04:00"}]})
+    agent.TOOL_IMPLS["get_shabbos_times"] = agent.hebcal.shabbos_times
+    trace, client = [], LateThenFixedClient()
+    p = agent.plan("friday", client=client, trace=trace)
+    assert client.calls == 3 and any(t["tool"] == "self_check" for t in trace)
+    assert p["tasks"][0]["end"] == "2026-10-30T17:00:00-04:00" and p["warnings"] == []
+
+
+def test_summary_falls_back_when_model_returns_nothing():
+    class Empty:
+        chat = NS(completions=NS(create=lambda **k: NS(choices=[NS(message=NS(content=None))])))
+    p = {"candle_lighting": "2026-10-30T17:38:00-04:00",
+         "tasks": [{"start": "2026-10-30T13:00:00-04:00", "end": "2026-10-30T14:00:00-04:00", "title": "Soup"}]}
+    out = agent.summarize(p, client=Empty())
+    assert "1:00 PM - Soup" in out and "5:38 PM" in out

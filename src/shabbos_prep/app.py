@@ -21,7 +21,20 @@ def run(request: str):
             for t in p.get("tasks", [])]
     f = tempfile.NamedTemporaryFile("w", suffix=".ics", delete=False)
     f.write(plan_to_ics(p)); f.close()
-    return msg, rows, f.name, json.dumps(trace, indent=2)
+    head = (f"**Candle lighting:** {_hm(p.get('candle_lighting'))} · **Havdalah:** "
+            f"{_hm(p.get('havdalah'))} · **Parsha:** {p.get('parsha') or '-'} · {p.get('location', '')}")
+    if any(t["tool"] == "self_check" for t in trace):
+        head += "\n\n✅ Self-check caught a rule violation and the planner fixed it."
+    warn = "\n".join(f"- {w}" for w in p.get("warnings", [])) or "None."
+    return head, msg, rows, f.name, "**Notes & warnings**\n" + warn, json.dumps(trace, indent=2)
+
+
+def _hm(ts):
+    import datetime as dt
+    try:
+        return dt.datetime.fromisoformat(ts).strftime("%a %b %-d, %-I:%M %p")
+    except Exception:
+        return "-"
 
 
 def build():
@@ -30,12 +43,14 @@ def build():
                     f"times. Planner: `{PLANNER_MODEL}` · Summary: `{FAST_MODEL}` on Nebius Token Factory.")
         req = gr.Textbox(label="Your Friday", value=EXAMPLE, lines=4)
         btn = gr.Button("Plan my Erev Shabbos", variant="primary")
+        facts = gr.Markdown()
         summary = gr.Textbox(label="Family message")
         table = gr.Dataframe(headers=["Start", "End", "Task", "Who", "Note"], wrap=True)
         ics = gr.File(label="Add to calendar (.ics)")
+        warns = gr.Markdown()
         with gr.Accordion("Agent trace (tool calls)", open=False):
             tr = gr.Code(language="json")
-        btn.click(run, req, [summary, table, ics, tr])
+        btn.click(run, req, [facts, summary, table, ics, warns, tr])
         gr.Markdown("Times: Hebcal.com (CC BY 4.0). Not a halachic authority — ask your Rav.")
     return demo
 

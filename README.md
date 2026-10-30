@@ -23,6 +23,10 @@ an `.ics` file so everyone's phone pings before each step.
 | Tool-calling planner | `nvidia/nemotron-3-super-120b-a12b` | Multi-step reasoning: calls `get_shabbos_times` / `get_zmanim`, then back-schedules tasks with buffers |
 | Family message | `nvidia/NVIDIA-Nemotron-3-Nano-30B-A3B` | Fast, cheap everyday call for the short summary |
 
+**Grounding and self-check.** After planning, the app overwrites candle lighting, havdalah and parsha
+with the real values from the tool, then checks every task: wrong day, or ending inside the 15-minute
+buffer before candle lighting. Any violation goes back to Nemotron 3 Super once for a corrected plan.
+
 All inference is a runtime call to the Token Factory OpenAI-compatible API
 (`https://api.tokenfactory.nebius.com/v1/`). Model IDs are configurable via `PLANNER_MODEL` / `FAST_MODEL`
 (you can switch the planner to Nemotron 3 Ultra for harder plans, e.g. a two-day Yom Tov).

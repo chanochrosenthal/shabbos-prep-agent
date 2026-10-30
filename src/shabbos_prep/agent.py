@@ -108,6 +108,8 @@ def _ground(plan_obj: dict, trace: list) -> dict:
             plan_obj["location"] = t["result"]["location"]
         break
     warnings = plan_obj.setdefault("warnings", [])
+    violations = plan_obj.setdefault("_violations", [])
+    violations.clear()
     try:
         candles = dt.datetime.fromisoformat(plan_obj["candle_lighting"])
     except Exception:
@@ -119,20 +121,21 @@ def _ground(plan_obj: dict, trace: list) -> dict:
         except Exception:
             continue
         if end.date() != candles.date():
-            warnings.append(f"'{task['title']}' is dated {end.date()}, not the Friday "
-                            f"{candles.date()}; check the plan.")
-        elif end > candles - dt.timedelta(minutes=15) and "light" not in task["title"].lower():
-            warnings.append(f"'{task['title']}' ends {end:%-I:%M %p}, less than 15 minutes "
-                            f"before candle lighting ({candles:%-I:%M %p}).")
+            violations.append(f"'{task['title']}' is dated {end.date()}, not the Friday "
+                              f"{candles.date()}.")
+        elif end > candles - dt.timedelta(minutes=15) and "candle" not in task["title"].lower():
+            violations.append(f"'{task['title']}' ends {end:%-I:%M %p}, less than 15 minutes "
+                              f"before candle lighting ({candles:%-I:%M %p}).")
     return plan_obj
 
 
-def plan(request: str, client=None, max_steps: int = 6, trace: list | None = None) -> dict:
+def plan(request: str, client=None, max_steps: int = 8, trace: list | None = None) -> dict:
     """Run the tool-calling loop and return the structured plan."""
     client = client or make_client()
     trace = trace if trace is not None else []
     messages = [{"role": "system", "content": SYSTEM + _date_context()},
                 {"role": "user", "content": request}]
+    revised = False
     for _ in range(max_steps):
         resp = client.chat.completions.create(model=PLANNER_MODEL, messages=messages,
                                               tools=TOOLS, temperature=0.2)
@@ -151,7 +154,18 @@ def plan(request: str, client=None, max_steps: int = 6, trace: list | None = Non
                 messages.append({"role": "tool", "tool_call_id": tc.id,
                                  "content": json.dumps(result)})
             continue
-        return _ground(_extract_json(msg.content or "{}"), trace)
+        result = _ground(_extract_json(msg.content or "{}"), trace)
+        if result["_violations"] and not revised:
+            # Self-check: hand the violations back to the planner once and ask for a fix.
+            revised = True
+            trace.append({"tool": "self_check", "args": {}, "result": {"violations": result["_violations"]}})
+            messages.append({"role": "assistant", "content": msg.content or ""})
+            messages.append({"role": "user", "content": "Your plan breaks these rules:\n- "
+                             + "\n- ".join(result["_violations"])
+                             + "\nReturn the corrected plan as JSON only. Same format."})
+            continue
+        result["warnings"] = result.get("warnings", []) + result.pop("_violations")
+        return result
     raise RuntimeError("Agent did not finish within max_steps")
 
 
@@ -164,10 +178,35 @@ def summarize(plan_obj: dict, client=None) -> str:
         facts = f" Candle lighting is exactly {c:%-I:%M %p} on {c:%A %b %-d}; state that time."
     except Exception:
         pass
-    resp = client.chat.completions.create(
-        model=FAST_MODEL, temperature=0.3,
-        messages=[{"role": "system", "content": "Write a warm 5-line Erev Shabbos game plan for a "
-                   "family group chat. Plain text, times in 12-hour format, no emojis overload. "
-                   "Use ONLY times that appear in the JSON; never invent a time." + facts},
-                  {"role": "user", "content": json.dumps(plan_obj)}])
-    return resp.choices[0].message.content.strip()
+    slim = {k: plan_obj.get(k) for k in ("location", "candle_lighting", "tasks")}
+    for _ in range(2):  # the fast model occasionally returns empty content; retry once
+        try:
+            resp = client.chat.completions.create(
+                model=FAST_MODEL, temperature=0.3, max_tokens=2048,
+                messages=[{"role": "system", "content": "Write a warm 5-line Erev Shabbos game plan "
+                           "for a family group chat. Plain text, times in 12-hour format, no emojis "
+                           "overload. Use ONLY times that appear in the JSON; never invent a time."
+                           + facts},
+                          {"role": "user", "content": json.dumps(slim)}])
+            text = (resp.choices[0].message.content or "").strip()
+            if text:
+                return text
+        except Exception:
+            pass
+    return _fallback_summary(plan_obj)
+
+
+def _fallback_summary(plan_obj: dict) -> str:
+    """Deterministic message if the model is unavailable: first steps plus candle lighting."""
+    lines = []
+    for t in plan_obj.get("tasks", [])[:4]:
+        try:
+            lines.append(f"{dt.datetime.fromisoformat(t['start']):%-I:%M %p} - {t['title']}")
+        except Exception:
+            continue
+    try:
+        c = dt.datetime.fromisoformat(plan_obj["candle_lighting"])
+        lines.append(f"{c:%-I:%M %p} - Candle lighting. Good Shabbos!")
+    except Exception:
+        pass
+    return "\n".join(lines)

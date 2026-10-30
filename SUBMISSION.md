@@ -46,7 +46,11 @@ It never guesses a time and never gives halachic rulings ("ask your Rav").
   Fix: we inject today's date and the coming Friday into the prompt, then a grounding step overwrites
   candle lighting, havdalah and parsha with the tool's real values and warns about any task that is
   on the wrong day or eats into the 15-minute buffer.
-- The summary model once invented a candle time; it now gets the verified time explicitly.
+- Models still sometimes squeeze a task into the last 15 minutes. A self-check step now catches it,
+  hands the violations back to Nemotron 3 Super, and shows the corrected plan.
+- The summary model once invented a candle time; it now gets the verified time explicitly. Nano is a
+  reasoning model, so a tight token cap could leave it with no answer; we give it room and keep a
+  deterministic fallback message.
 - Getting strict JSON back reliably after tool calls: a tight output contract plus a tolerant extractor.
 - Time zones and DST (this hackathon ends the week clocks change): all times are ISO-8601 with offsets.
 - Being useful without overstepping: the agent plans logistics but defers halachic questions.
