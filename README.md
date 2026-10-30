@@ -42,8 +42,12 @@ python -m venv .venv && source .venv/bin/activate
 pip install -r requirements.txt
 export NEBIUS_API_KEY=...   # from https://tokenfactory.nebius.com
 python app.py               # opens http://localhost:7860
-pytest -q                   # offline tests (scripted model, no key needed)
+pip install pytest && pytest -q   # offline tests (scripted model, no key needed)
 ```
+
+## Deploy (free)
+The repo includes `render.yaml`: on Render, choose **New > Blueprint**, pick this repo and set
+`NEBIUS_API_KEY`. The app binds to `0.0.0.0:$PORT`.
 
 ## Architecture
 ```

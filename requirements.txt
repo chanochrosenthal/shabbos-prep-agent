@@ -1,4 +1,3 @@
 openai>=1.40
 httpx>=0.27
-gradio>=4.40
-pytest>=8
+gradio==6.31.0

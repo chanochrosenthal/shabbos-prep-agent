@@ -1,0 +1,16 @@
+# Render Blueprint: free web service for the public demo.
+# Render sets $PORT; app.py binds Gradio to 0.0.0.0:$PORT. Set NEBIUS_API_KEY in the dashboard.
+services:
+  - type: web
+    name: shabbos-prep-agent
+    runtime: python
+    plan: free
+    branch: main
+    buildCommand: pip install -r requirements.txt
+    startCommand: python app.py
+    healthCheckPath: /
+    envVars:
+      - key: PYTHON_VERSION
+        value: "3.12.7"
+      - key: NEBIUS_API_KEY
+        sync: false
